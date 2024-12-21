@@ -1,0 +1,1 @@
+python3 clean_data.py "/Users/mszwagrzak/stock_analysis/stock_analysis2/technical_us.pickle"
