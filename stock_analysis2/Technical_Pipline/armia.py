@@ -9,6 +9,7 @@ from pickle_loader import pickle_loader
 import pandas as pd
 import numpy as np
 import pmdarima as pm
+import pickle
 
 technical_data = pickle_loader("clean_technical_data.pickle")
 chunk_end_dates = pickle_loader("chunk_end_dates.pickle")
@@ -63,13 +64,14 @@ class get_ARMIA_predictions():
             chunk_predictions = []
             lst_stock_data = smoothing_data[stock]
             
-            
             for i, model in enumerate(lst_models):
                 final_stock_value = lst_stock_data[i][-1]
-                print(final_stock_value)
+                
                 value_prediction, conf_int = model.predict(n_periods = num_forcast_periods, return_conf_int = True)
-                print(value_prediction, conf_int)
-                chunk_predictions.append((chunk_end_dates[i], (value_prediction / final_stock_value, (conf_int[1] - conf_int[0]) / final_stock_value )))
+                value_prediction = value_prediction[-1]
+                conf_int = conf_int[-1]
+                
+                chunk_predictions.append((chunk_end_dates[i], (value_prediction / final_stock_value, conf_int[1] / conf_int[0])))
             
             predictions_dict[stock] = chunk_predictions
         
@@ -85,8 +87,6 @@ class get_ARMIA_predictions():
         
         for stock, smoothed_stock_data in smoothing_data.items():
             stock_models = []
-            i = i + 1 
-            print(i / len(smoothing_data), 'Complete ')
             for i, smoothed_chunk in enumerate(smoothed_stock_data):
                 stock_models.append(\
                        pm.auto_arima(smoothed_chunk, d=1, seasonal=False, stepwise=True,\
@@ -126,21 +126,85 @@ class get_ARMIA_predictions():
 
 
 armia_obj = get_ARMIA_predictions(dataset = technical_data, chunk_end_dates = chunk_end_dates, )
-preds_s20 = armia_obj.get_ARMIA_predictions(20)
+#preds_s20 = armia_obj.get_ARMIA_predictions(20)
+
+#%%
+pred_s20 = armia_obj.get_ARMIA_predictions(20)
+pred_s30 = armia_obj.get_ARMIA_predictions(30)
 pred_s40 = armia_obj.get_ARMIA_predictions(40)
 
+all_pred = [pred_s20, pred_s30, pred_s40]
+
+#%%
 
 
-class get_final_dataset(self):
+class get_final_dataset():
     
     
-    def __init__(self, armia_dict):
-        self.armia_dict = armia_dict
-        self.index = list(armia_dict.keys())
-        first_stock_predictions = armia_dict[self.index[0]]
+    def __init__(self, all_pred):
+        self.all_pred = all_pred
+        self.index = list(all_pred[0].keys())
+        first_stock_predictions = all_pred[0][self.index[0]]
         self.timestamps = [prediction[0] for prediction in first_stock_predictions]
     
-    def get_dataset()
+    def get_dataset(self):
+        self.by_chunk = self.sort_by_chunk()
+        self.dfs = self.create_dfs()
+        return self.dfs
         
+    def sort_by_chunk(self):
+        timestamps = self.timestamps
+        stocks = self.index
+        all_pred = self.all_pred 
         
+        sorted_dict = {timestamp : {stock : [] for stock in stocks } for timestamp in timestamps}
         
+        for time_stamp, stock_dict in sorted_dict.items():
+            for stock in stocks:
+                for pred_dict in all_pred:
+                    pred = pred_dict[stock]
+                    for chunk_pred in pred:
+                        if chunk_pred[0] == time_stamp:
+                            stock_dict[stock].append(chunk_pred[1]) # to change after test
+        
+        return  sorted_dict
+    
+    def create_dfs(self):
+        by_chunk = self.by_chunk
+        final_dfs = {}
+        
+        for chunk, stock_data in by_chunk.items():
+           
+            num_tuples = len(next(iter(stock_data.values())))
+
+            # Ensure all stocks have the same number of tuples
+            if not all(len(v) == num_tuples for v in stock_data.values()):
+                raise ValueError("All stock entries must contain the same number of tuples.")
+
+            # Initialize dictionaries for price and cost columns
+            prediction_columns = {}
+            conf_columns = {}
+
+            # Loop through the stock data and assign values to columns
+            for idx in range(num_tuples):
+                prediction_columns[f's{(idx + 2) * 10}p'] = [data[idx][0] for data in stock_data.values()]
+                conf_columns[f's{(idx + 2) * 10}c'] = [data[idx][1] for data in stock_data.values()]            
+
+            # Combine price and cost columns
+            all_columns = {**prediction_columns, **conf_columns}
+
+            # Create the DataFrame with the stock names as the index
+            df = pd.DataFrame(all_columns, index=stock_data.keys())
+
+            final_dfs[chunk] = df
+                            
+        return final_dfs
+        
+final_obj = get_final_dataset(all_pred)
+final_dfs = final_obj.get_dataset()
+
+        
+#%%
+
+with open("ARMIA_dfs.pickle", 'wb') as f:
+        pickle.dump(final_dfs, f)
